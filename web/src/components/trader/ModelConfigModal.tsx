@@ -297,6 +297,102 @@ function Claw402ConfigForm({
   onSubmit: (e: React.FormEvent) => void
   language: Language
 }) {
+  const [walletAddress, setWalletAddress] = useState('')
+  const [usdcBalance, setUsdcBalance] = useState<string | null>(null)
+  const [keyError, setKeyError] = useState('')
+  const [validating, setValidating] = useState(false)
+  const [claw402Status, setClaw402Status] = useState<string | null>(null)
+  const [testResult, setTestResult] = useState<{ status: string; message: string } | null>(null)
+  const [testing, setTesting] = useState(false)
+
+  // Client-side validation helper
+  const getClientError = (key: string): string => {
+    if (!key) return ''
+    if (!key.startsWith('0x')) return t('modelConfig.invalidKeyPrefix', language)
+    if (key.length !== 66) return `${t('modelConfig.invalidKeyLength', language)} ${key.length}`
+    if (!/^0x[0-9a-fA-F]{64}$/.test(key)) return t('modelConfig.invalidKeyChars', language)
+    return ''
+  }
+
+  const isKeyValid = apiKey.length === 66 && apiKey.startsWith('0x') && /^0x[0-9a-fA-F]{64}$/.test(apiKey)
+
+  // Truncate address for display
+  const truncAddr = (addr: string) => addr ? `${addr.slice(0, 6)}...${addr.slice(-4)}` : ''
+
+  // Debounced validation when apiKey changes
+  useEffect(() => {
+    setWalletAddress('')
+    setUsdcBalance(null)
+    setClaw402Status(null)
+    setTestResult(null)
+
+    const clientErr = getClientError(apiKey)
+    setKeyError(clientErr)
+
+    if (clientErr || !apiKey) {
+      setValidating(false)
+      return
+    }
+
+    setValidating(true)
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/wallet/validate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ private_key: apiKey }),
+        })
+        const data = await res.json()
+        if (data.valid) {
+          setWalletAddress(data.address || '')
+          setUsdcBalance(data.balance_usdc || '0.00')
+          setClaw402Status(data.claw402_status || 'unknown')
+          setKeyError('')
+        } else {
+          setKeyError(data.error || 'Invalid key')
+        }
+      } catch {
+        setKeyError('Validation request failed')
+      } finally {
+        setValidating(false)
+      }
+    }, 500)
+
+    return () => clearTimeout(timer)
+  }, [apiKey])
+
+  const handleTestConnection = async () => {
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const res = await fetch('/api/wallet/validate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ private_key: apiKey }),
+      })
+      const data = await res.json()
+      if (data.valid) {
+        setWalletAddress(data.address || '')
+        setUsdcBalance(data.balance_usdc || '0.00')
+        setClaw402Status(data.claw402_status || 'unknown')
+        setTestResult({
+          status: data.claw402_status === 'ok' ? 'ok' : 'error',
+          message: data.claw402_status === 'ok'
+            ? t('modelConfig.claw402Connected', language)
+            : t('modelConfig.claw402Unreachable', language),
+        })
+      } else {
+        setTestResult({ status: 'error', message: data.error || 'Invalid key' })
+      }
+    } catch {
+      setTestResult({ status: 'error', message: t('modelConfig.claw402Unreachable', language) })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const balanceNum = usdcBalance ? parseFloat(usdcBalance) : 0
+
   return (
     <form onSubmit={onSubmit} className="space-y-5">
       {/* Claw402 Hero Header */}
@@ -395,7 +491,11 @@ function Claw402ConfigForm({
             onChange={(e) => onApiKeyChange(e.target.value)}
             placeholder="0x..."
             className="w-full px-4 py-3 rounded-xl font-mono text-sm"
-            style={{ background: '#0B0E11', border: '1px solid #2B3139', color: '#EAECEF' }}
+            style={{
+              background: '#0B0E11',
+              border: keyError ? '1px solid #EF4444' : walletAddress ? '1px solid #00E096' : '1px solid #2B3139',
+              color: '#EAECEF',
+            }}
             required
           />
           <div className="flex items-start gap-1.5 text-[11px]" style={{ color: '#848E9C' }}>
@@ -405,6 +505,79 @@ function Claw402ConfigForm({
             </span>
           </div>
         </div>
+
+        {/* Wallet Validation Results */}
+        {apiKey && (
+          <div className="space-y-2 pl-1">
+            {/* Validating spinner */}
+            {validating && (
+              <div className="flex items-center gap-2 text-xs" style={{ color: '#60A5FA' }}>
+                <span className="animate-spin">⏳</span>
+                {t('modelConfig.validating', language)}
+              </div>
+            )}
+
+            {/* Error message */}
+            {keyError && !validating && (
+              <div className="flex items-center gap-2 text-xs" style={{ color: '#EF4444' }}>
+                <span>❌</span>
+                {keyError}
+              </div>
+            )}
+
+            {/* Success: address + balance + status */}
+            {walletAddress && !validating && !keyError && (
+              <>
+                <div className="flex items-center gap-2 text-xs" style={{ color: '#00E096' }}>
+                  <span>✅</span>
+                  <span>{t('modelConfig.walletAddress', language)}: <span className="font-mono">{truncAddr(walletAddress)}</span></span>
+                </div>
+                {usdcBalance !== null && (
+                  <div className="flex items-center gap-2 text-xs" style={{ color: balanceNum > 0 ? '#00E096' : '#F59E0B' }}>
+                    <span>💰</span>
+                    <span>{t('modelConfig.usdcBalance', language)}: ${usdcBalance}</span>
+                  </div>
+                )}
+                {balanceNum === 0 && usdcBalance !== null && (
+                  <div className="flex items-center gap-2 text-[11px] pl-5" style={{ color: '#F59E0B' }}>
+                    <span>👉</span>
+                    {t('modelConfig.depositUsdc', language)}
+                  </div>
+                )}
+                {claw402Status && (
+                  <div className="flex items-center gap-2 text-xs" style={{ color: claw402Status === 'ok' ? '#00E096' : '#EF4444' }}>
+                    <span>{claw402Status === 'ok' ? '🟢' : '🔴'}</span>
+                    {claw402Status === 'ok'
+                      ? t('modelConfig.claw402Connected', language)
+                      : t('modelConfig.claw402Unreachable', language)}
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Test Connection button */}
+            {isKeyValid && !validating && (
+              <button
+                type="button"
+                onClick={handleTestConnection}
+                disabled={testing}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all hover:scale-[1.02] disabled:opacity-50"
+                style={{ background: 'rgba(37, 99, 235, 0.15)', border: '1px solid rgba(37, 99, 235, 0.3)', color: '#60A5FA' }}
+              >
+                <span>🔗</span>
+                {testing ? t('modelConfig.testingConnection', language) : t('modelConfig.testConnection', language)}
+              </button>
+            )}
+
+            {/* Test result */}
+            {testResult && !testing && (
+              <div className="flex items-center gap-2 text-xs" style={{ color: testResult.status === 'ok' ? '#00E096' : '#EF4444' }}>
+                <span>{testResult.status === 'ok' ? '✅' : '❌'}</span>
+                {testResult.message}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* USDC Recharge Guide */}
@@ -435,9 +608,9 @@ function Claw402ConfigForm({
         </button>
         <button
           type="submit"
-          disabled={!apiKey.trim()}
+          disabled={!isKeyValid}
           className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-bold transition-all hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed"
-          style={{ background: apiKey.trim() ? 'linear-gradient(135deg, #2563EB, #7C3AED)' : '#2B3139', color: '#fff' }}
+          style={{ background: isKeyValid ? 'linear-gradient(135deg, #2563EB, #7C3AED)' : '#2B3139', color: '#fff' }}
         >
           {'🚀 ' + t('modelConfig.startTrading', language)}
         </button>
